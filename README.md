@@ -9,6 +9,7 @@ This is the initial phase focusing on establishing the foundation and implementi
 ### Features
 
 - **Jira Ticket Lookup**: Retrieve ticket details by ID
+- **Jira Ticket Creation**: Create new tickets in Jira projects
 - **Mock Mode**: Test functionality without real credentials
 - **Live Mode**: Connect to real Jira instance with proper credentials
 
@@ -55,14 +56,23 @@ result = get_jira_ticket("PROJ-123")
 print(result)
 ```
 
+Test the Jira ticket creation function:
+```python
+from main import create_jira_ticket
+result = create_jira_ticket("PROJ", "Test Summary", "Test Description", "Task")
+print(result)
+```
+
 ### MCP Tools
 
 - `get_jira_ticket`: Retrieves summary, status, and assignee for a Jira ticket
+- `create_jira_ticket`: Creates a new issue (Task, Bug, Story) in a specified Jira project
 
 ### Development Status
 
 - ✅ Basic MCP server structure
 - ✅ Jira ticket lookup (mock and live modes)
+- ✅ Jira ticket creation (mock and live modes)
 - ✅ Environment variable configuration
 - ✅ Error handling
 - 🔄 Slack integration (planned)

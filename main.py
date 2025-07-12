@@ -1,125 +1,111 @@
 # main.py
 # This is the main file for our Atlassian & Slack MCP Server.
-# Phase 1: Foundation and Jira Proof-of-Concept
+# Phase 2: Added 'create_jira_ticket' tool.
 
 # --- 1. Import Necessary Libraries ---
-# We need 'os' and 'dotenv' to handle environment variables for API keys.
-# 'requests' is a popular library for making HTTP requests to APIs like Jira's.
-# 'mcp_sdk' is the official library for building our MCP server.
 import os
 import requests
 from dotenv import load_dotenv
-from mcp import Tool
+import asyncio
+import json
 from mcp.server import Server
+from mcp.server.models import InitializationOptions
+from mcp.server.lowlevel import NotificationOptions
 from mcp.server.stdio import stdio_server
+from mcp.types import ServerCapabilities, Tool, TextContent
 
 # --- 2. Load Configuration ---
-# This line loads the variables from a file named '.env' in the same directory.
-# This is a best practice for keeping secrets like API keys out of your code.
 load_dotenv()
+ATLASSIAN_URL = os.getenv("ATLASSIAN_URL")
+ATLASSIAN_EMAIL = os.getenv("ATLASSIAN_EMAIL")
+ATLASSIAN_TOKEN = os.getenv("ATLASSIAN_TOKEN")
 
-# We retrieve the Atlassian credentials from the environment variables.
-# If they aren't found, they will default to None.
-ATLASSIAN_URL = os.getenv("ATLASSIAN_URL")  # e.g., "https://your-domain.atlassian.net"
-ATLASSIAN_EMAIL = os.getenv("ATLASSIAN_EMAIL") # Your email for the Atlassian account
-ATLASSIAN_TOKEN = os.getenv("ATLASSIAN_TOKEN") # The API token you generate in Atlassian
-
-# --- 3. Define The Core Function (Our First Tool) ---
-# This function contains the actual logic for getting a Jira ticket.
-# It's designed to work even if you don't have real credentials yet.
+# --- 3. Define Core Tool Functions ---
 
 def get_jira_ticket(ticket_id: str) -> dict:
-    """
-    Fetches details for a specific Jira ticket.
-
-    Args:
-        ticket_id: The ID of the Jira ticket (e.g., "PROJ-123").
-
-    Returns:
-        A dictionary containing the ticket's details or an error message.
-    """
+    """Fetches details for a specific Jira ticket."""
     print(f"Tool 'get_jira_ticket' called with ID: {ticket_id}")
-
-    # --- MOCK MODE ---
-    # If we don't have Atlassian credentials, we'll return a sample response.
-    # This allows us to test the server without a real Atlassian account.
     if not all([ATLASSIAN_URL, ATLASSIAN_EMAIL, ATLASSIAN_TOKEN]):
-        print("--> Running in MOCK MODE (no Atlassian credentials found).")
-        # You can test with a known "fake" ticket ID
+        print("--> Running in MOCK MODE.")
         if ticket_id == "PROJ-123":
-            return {
-                "success": True,
-                "ticket_id": ticket_id,
-                "summary": "This is a sample ticket summary from mock mode.",
-                "status": "In Progress",
-                "assignee": "Mock User",
-                "url": f"https://mock-jira.com/browse/{ticket_id}"
-            }
+            return {"success": True, "ticket_id": ticket_id, "summary": "This is a sample ticket summary.", "status": "In Progress", "assignee": "Mock User", "url": f"https://mock-jira.com/browse/{ticket_id}"}
         else:
-            return {
-                "success": False,
-                "error": f"Ticket '{ticket_id}' not found in mock data."
-            }
-
-    # --- LIVE MODE ---
-    # This part will run only if you provide credentials in your .env file.
+            return {"success": False, "error": f"Ticket '{ticket_id}' not found in mock data."}
+    
     print("--> Running in LIVE MODE.")
     try:
-        # Construct the full URL for the Jira API endpoint
         api_url = f"{ATLASSIAN_URL}/rest/api/3/issue/{ticket_id}"
-
-        # Set up authentication using your email and API token
         auth = requests.auth.HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_TOKEN)
-
-        # Set headers to indicate we're sending and accepting JSON data
-        headers = {
-            "Accept": "application/json"
-        }
-
-        # Make the GET request to the Jira API
+        headers = {"Accept": "application/json"}
         response = requests.get(api_url, headers=headers, auth=auth)
-
-        # Check if the request was successful
         if response.status_code == 200:
             data = response.json()
-            # Extract the relevant fields from the response
             fields = data.get("fields", {})
             status = fields.get("status", {}).get("name", "N/A")
-            assignee = fields.get("assignee")
-            assignee_name = assignee.get("displayName", "Unassigned") if assignee else "Unassigned"
+            assignee = fields.get("assignee", {}).get("displayName", "Unassigned")
+            return {"success": True, "ticket_id": data.get("key"), "summary": fields.get("summary"), "status": status, "assignee": assignee, "url": f"{ATLASSIAN_URL}/browse/{data.get('key')}"}
+        else:
+            return {"success": False, "error": f"Jira API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
+# NEW FUNCTION: create_jira_ticket
+def create_jira_ticket(project_key: str, summary: str, description: str, issue_type: str) -> dict:
+    """Creates a new ticket in a Jira project."""
+    print(f"Tool 'create_jira_ticket' called for project: {project_key}")
+
+    # --- MOCK MODE ---
+    if not all([ATLASSIAN_URL, ATLASSIAN_EMAIL, ATLASSIAN_TOKEN]):
+        print("--> Running in MOCK MODE.")
+        new_ticket_id = f"{project_key}-999" # Create a fake new ticket ID
+        return {
+            "success": True,
+            "ticket_id": new_ticket_id,
+            "summary": summary,
+            "url": f"https://mock-jira.com/browse/{new_ticket_id}"
+        }
+
+    # --- LIVE MODE ---
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{ATLASSIAN_URL}/rest/api/3/issue"
+        auth = requests.auth.HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_TOKEN)
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        
+        # This is the standard payload structure for creating a Jira issue
+        payload = json.dumps({
+            "fields": {
+                "project": {"key": project_key},
+                "summary": summary,
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}]
+                },
+                "issuetype": {"name": issue_type}
+            }
+        })
+
+        response = requests.post(api_url, data=payload, headers=headers, auth=auth)
+
+        if response.status_code == 201: # 201 Created is the success code for POST
+            data = response.json()
             return {
                 "success": True,
                 "ticket_id": data.get("key"),
-                "summary": fields.get("summary"),
-                "status": status,
-                "assignee": assignee_name,
+                "summary": summary,
                 "url": f"{ATLASSIAN_URL}/browse/{data.get('key')}"
             }
-        elif response.status_code == 404:
-            return {"success": False, "error": f"Ticket '{ticket_id}' not found."}
         else:
-            # Handle other potential errors (e.g., permissions)
             return {"success": False, "error": f"Jira API error: {response.status_code} - {response.text}"}
-
     except Exception as e:
-        print(f"An exception occurred: {e}")
         return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
 
 # --- 4. Main Server Execution Block ---
-# This code runs when you execute the script directly (e.g., `python main.py`).
 if __name__ == "__main__":
-    import asyncio
-    from mcp.server.models import InitializationOptions
-    from mcp.server.lowlevel import NotificationOptions
-    from mcp.server.stdio import stdio_server
-    from mcp.types import ServerCapabilities, Tool, TextContent
-
-    # Create an instance of the MCP server
     server = Server("atlassian-mcp-server")
 
-    # Define the tool handler using the decorator pattern
     @server.list_tools()
     async def handle_list_tools():
         """Return the list of available tools."""
@@ -130,12 +116,24 @@ if __name__ == "__main__":
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "ticket_id": {
-                            "type": "string",
-                            "description": "The ID of the Jira ticket (e.g., 'PROJ-123')"
-                        }
+                        "ticket_id": {"type": "string", "description": "The ID of the Jira ticket (e.g., 'PROJ-123')"}
                     },
                     "required": ["ticket_id"]
+                }
+            ),
+            # NEW TOOL DEFINITION
+            Tool(
+                name="create_jira_ticket",
+                description="Creates a new issue (e.g., Task, Bug, Story) in a specified Jira project.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string", "description": "The key for the Jira project (e.g., 'PROJ')."},
+                        "summary": {"type": "string", "description": "The title or summary of the new issue."},
+                        "description": {"type": "string", "description": "The detailed description for the issue."},
+                        "issue_type": {"type": "string", "description": "The type of issue to create (e.g., 'Task', 'Bug', 'Story')."}
+                    },
+                    "required": ["project_key", "summary", "description", "issue_type"]
                 }
             )
         ]
@@ -143,17 +141,37 @@ if __name__ == "__main__":
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict):
         """Handle tool calls."""
+        result = {}
         if name == "get_jira_ticket":
             ticket_id = arguments.get("ticket_id")
             if not ticket_id:
-                return [TextContent(type="text", text="Error: ticket_id is required")]
-            
-            result = get_jira_ticket(ticket_id)
-            return [TextContent(type="text", text=str(result))]
-        else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+                result = {"success": False, "error": "ticket_id is required"}
+            else:
+                result = get_jira_ticket(ticket_id)
 
-    # Main async function to run the server
+        # NEW TOOL HANDLER
+        elif name == "create_jira_ticket":
+            # Extract arguments using .get() to avoid errors if one is missing
+            project_key = arguments.get("project_key")
+            summary = arguments.get("summary")
+            description = arguments.get("description")
+            issue_type = arguments.get("issue_type")
+            
+            if not all([project_key, summary, description, issue_type]):
+                result = {"success": False, "error": "Missing one or more required arguments: project_key, summary, description, issue_type"}
+            else:
+                # Type safety: ensure all values are strings
+                result = create_jira_ticket(
+                    str(project_key), 
+                    str(summary), 
+                    str(description), 
+                    str(issue_type)
+                )
+        else:
+            result = {"success": False, "error": f"Unknown tool: {name}"}
+        
+        return [TextContent(type="text", text=str(result))]
+
     async def main():
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
@@ -169,11 +187,10 @@ if __name__ == "__main__":
                 ),
             )
 
-    # Start the server and have it listen for requests
     print("=============================================")
-    print("  Atlassian MCP Server - Phase 1 Started   ")
+    print("  Atlassian MCP Server - Phase 2 Started   ")
     print("  Mode: Mock (unless .env is configured)   ")
-    print("  Tool Registered: get_jira_ticket         ")
+    print("  Tools Registered: get_jira_ticket, create_jira_ticket")
     print("=============================================")
     print("\nServer is listening for requests. Connect with an MCP client.")
     
