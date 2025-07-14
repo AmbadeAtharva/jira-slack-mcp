@@ -106,3 +106,34 @@ print(result)
 - `python-dotenv` for environment variable management
 - `requests` for HTTP API calls
 - `mcp` for MCP server functionality 
+
+## Slack Bot Integration
+
+You can interact with your MCP server directly from Slack using the included `slack_bot.py`.
+
+### Setup
+1. Create a Slack App and install it to your workspace. Get the `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from your Slack App configuration.
+2. Add these to your `.env` file:
+   ```env
+   SLACK_BOT_TOKEN=xoxb-...
+   SLACK_APP_TOKEN=xapp-...
+   ```
+3. Install the required dependencies:
+   ```bash
+   pip install slack_bolt
+   ```
+
+### Running the Bot
+```bash
+python slack_bot.py
+```
+
+### Usage in Slack
+Mention the bot in a channel with a command, for example:
+```
+@YourBot get_jira_ticket PROJ-123
+@YourBot create_jira_ticket PROJ "Summary" "Description" Task
+@YourBot search_jira_tickets project = PROJ AND status = 'In Progress'
+@YourBot search_confluence_pages How to set up the VPN
+```
+The bot will parse your command, call the appropriate tool, and reply with the result in Slack. 
