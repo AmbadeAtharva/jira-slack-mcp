@@ -10,8 +10,10 @@ This is the initial phase focusing on establishing the foundation and implementi
 
 - **Jira Ticket Lookup**: Retrieve ticket details by ID
 - **Jira Ticket Creation**: Create new tickets in Jira projects
+- **Jira Ticket Search**: Find tickets using flexible JQL queries
+- **Confluence Page Search**: Find Confluence pages by text query
 - **Mock Mode**: Test functionality without real credentials
-- **Live Mode**: Connect to real Jira instance with proper credentials
+- **Live Mode**: Connect to real Jira/Confluence instances with credentials
 
 ### Installation
 
@@ -63,20 +65,40 @@ result = create_jira_ticket("PROJ", "Test Summary", "Test Description", "Task")
 print(result)
 ```
 
+### Usage Examples
+
+#### Search Jira Tickets
+```python
+from main import search_jira_tickets
+result = search_jira_tickets("project = PROJ AND status = 'In Progress'")
+print(result)
+```
+
+#### Search Confluence Pages
+```python
+from main import search_confluence_pages
+result = search_confluence_pages("How to set up the VPN")
+print(result)
+```
+
 ### MCP Tools
 
 - `get_jira_ticket`: Retrieves summary, status, and assignee for a Jira ticket
 - `create_jira_ticket`: Creates a new issue (Task, Bug, Story) in a specified Jira project
+- `search_jira_tickets`: Searches for Jira tickets using a JQL query and returns a list of matching tickets (ID, summary, status, URL)
+- `search_confluence_pages`: Searches Confluence for pages matching a text query and returns a list of relevant pages (title, snippet, URL)
 
 ### Development Status
 
 - ✅ Basic MCP server structure
 - ✅ Jira ticket lookup (mock and live modes)
 - ✅ Jira ticket creation (mock and live modes)
+- ✅ Jira ticket search (mock and live modes)
+- ✅ Confluence page search (mock and live modes)
 - ✅ Environment variable configuration
 - ✅ Error handling
 - 🔄 Slack integration (planned)
-- 🔄 Additional Jira features (planned)
+- 🔄 Additional Jira/Confluence features (planned)
 
 ### Requirements
 

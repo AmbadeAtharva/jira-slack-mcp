@@ -101,6 +101,107 @@ def create_jira_ticket(project_key: str, summary: str, description: str, issue_t
     except Exception as e:
         return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
+# NEW FUNCTION: search_jira_tickets
+
+def search_jira_tickets(jql_query: str) -> dict:
+    """Search Jira tickets using a JQL query."""
+    print(f"Tool 'search_jira_tickets' called with JQL: {jql_query}")
+    if not all([ATLASSIAN_URL, ATLASSIAN_EMAIL, ATLASSIAN_TOKEN]):
+        print("--> Running in MOCK MODE.")
+        # Return a sample list of tickets
+        return {
+            "success": True,
+            "tickets": [
+                {
+                    "ticket_id": "PROJ-101",
+                    "summary": "Fix login bug",
+                    "status": "To Do",
+                    "url": "https://mock-jira.com/browse/PROJ-101"
+                },
+                {
+                    "ticket_id": "PROJ-102",
+                    "summary": "Update documentation",
+                    "status": "In Progress",
+                    "url": "https://mock-jira.com/browse/PROJ-102"
+                }
+            ]
+        }
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{ATLASSIAN_URL}/rest/api/3/search"
+        auth = requests.auth.HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_TOKEN)
+        headers = {"Accept": "application/json"}
+        params = {"jql": jql_query, "maxResults": 10}
+        response = requests.get(api_url, headers=headers, auth=auth, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            tickets = []
+            for issue in data.get("issues", []):
+                fields = issue.get("fields", {})
+                tickets.append({
+                    "ticket_id": issue.get("key"),
+                    "summary": fields.get("summary"),
+                    "status": fields.get("status", {}).get("name", "N/A"),
+                    "url": f"{ATLASSIAN_URL}/browse/{issue.get('key')}"
+                })
+            return {"success": True, "tickets": tickets}
+        else:
+            return {"success": False, "error": f"Jira API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+# NEW FUNCTION: search_confluence_pages
+
+def search_confluence_pages(query: str) -> dict:
+    """Search Confluence pages using a text query."""
+    print(f"Tool 'search_confluence_pages' called with query: {query}")
+    # We'll use a separate set of env vars for Confluence, but fallback to Jira if not set
+    confluence_url = os.getenv("CONFLUENCE_URL", ATLASSIAN_URL)
+    confluence_email = os.getenv("CONFLUENCE_EMAIL", ATLASSIAN_EMAIL)
+    confluence_token = os.getenv("CONFLUENCE_TOKEN", ATLASSIAN_TOKEN)
+    if not all([confluence_url, confluence_email, confluence_token]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "pages": [
+                {
+                    "title": "How to set up the VPN",
+                    "snippet": "Step-by-step guide to configure VPN access...",
+                    "url": "https://mock-confluence.com/pages/viewpage.action?pageId=12345"
+                },
+                {
+                    "title": "Q3 marketing plan",
+                    "snippet": "This page outlines the marketing plan for Q3...",
+                    "url": "https://mock-confluence.com/pages/viewpage.action?pageId=67890"
+                }
+            ]
+        }
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{confluence_url}/wiki/rest/api/search"
+        auth = requests.auth.HTTPBasicAuth(confluence_email, confluence_token)
+        headers = {"Accept": "application/json"}
+        params = {"cql": f"text ~ '{query}'", "limit": 10}
+        response = requests.get(api_url, headers=headers, auth=auth, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            pages = []
+            for result in data.get("results", []):
+                title = result.get("title", "Untitled")
+                snippet = result.get("excerpt", "")
+                # Build the URL to the page
+                page_id = result.get("content", {}).get("id") or result.get("_id") or result.get("id")
+                url = f"{confluence_url}/wiki/pages/viewpage.action?pageId={page_id}" if page_id else confluence_url
+                pages.append({
+                    "title": title,
+                    "snippet": snippet,
+                    "url": url
+                })
+            return {"success": True, "pages": pages}
+        else:
+            return {"success": False, "error": f"Confluence API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
 # --- 4. Main Server Execution Block ---
 if __name__ == "__main__":
@@ -135,6 +236,28 @@ if __name__ == "__main__":
                     },
                     "required": ["project_key", "summary", "description", "issue_type"]
                 }
+            ),
+            Tool(
+                name="search_jira_tickets",
+                description="Searches for Jira tickets using a JQL query and returns a list of matching tickets (ID, summary, status, URL).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "jql_query": {"type": "string", "description": "A Jira Query Language (JQL) string to search for tickets."}
+                    },
+                    "required": ["jql_query"]
+                }
+            ),
+            Tool(
+                name="search_confluence_pages",
+                description="Searches Confluence for pages matching a text query and returns a list of relevant pages (title, snippet, URL).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "A text query to search for Confluence pages."}
+                    },
+                    "required": ["query"]
+                }
             )
         ]
 
@@ -167,6 +290,18 @@ if __name__ == "__main__":
                     str(description), 
                     str(issue_type)
                 )
+        elif name == "search_jira_tickets":
+            jql_query = arguments.get("jql_query")
+            if not jql_query:
+                result = {"success": False, "error": "jql_query is required"}
+            else:
+                result = search_jira_tickets(str(jql_query))
+        elif name == "search_confluence_pages":
+            query = arguments.get("query")
+            if not query:
+                result = {"success": False, "error": "query is required"}
+            else:
+                result = search_confluence_pages(str(query))
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
         
