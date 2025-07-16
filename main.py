@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # main.py
 # This is the main file for our Atlassian & Slack MCP Server.
 # Phase 2: Added 'create_jira_ticket' tool.

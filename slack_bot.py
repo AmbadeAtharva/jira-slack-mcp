@@ -8,7 +8,10 @@ import json
 from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import stdio_client, StdioServerParameters
+import sys
+from mcp.client.session import ClientSession
+from mcp.types import TextContent
 
 # --- 1. Load Configuration ---
 load_dotenv()
@@ -59,7 +62,7 @@ async def handle_app_mention(event, say):
     This function is triggered when the bot is @mentioned in a channel.
     """
     # Get the text from the user's message, removing the bot's mention
-    message_text = event["text"].replace(f"<@{event['user']}}>", "").strip()
+    message_text = event["text"].replace(f"<@{event['user']}>", "").strip()
     channel_id = event["channel"]
     
     print(f"Received mention: '{message_text}' in channel {channel_id}")
@@ -74,32 +77,45 @@ async def handle_app_mention(event, say):
 
     try:
         # --- MCP Client Logic ---
-        # 1. Start the MCP server as a subprocess
-        #    We assume main.py is in the same directory.
-        proc = await asyncio.create_subprocess_exec(
-            "python", "main.py",
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-        )
-
-        # 2. Connect the client to the server's stdio
-        async with stdio_client(proc) as client:
-            # 3. Call the tool
-            response = await client.call_tool(name=tool_name, arguments=arguments)
-            
-            # 4. Format and send the response
-            # The response from our server is a TextContent object containing a string
-            result_text = response[0].text
-            
-            # Try to parse the string as JSON for pretty formatting
-            try:
-                result_data = json.loads(result_text.replace("'", '"')) # Basic string to JSON conversion
-                pretty_response = json.dumps(result_data, indent=2)
-                await say(text=f"Tool `{tool_name}` finished with result:\n```
-{pretty_response}\n```")
-            except json.JSONDecodeError:
-                # If it's not JSON, just send the raw text
-                await say(text=f"Tool `{tool_name}` finished with result:\n{result_text}")
+        # 1 & 2. Launch the MCP server and connect the client in one step using StdioServerParameters
+        python_executable = sys.executable
+        main_py_path = os.path.abspath("main.py")
+        params = StdioServerParameters(command=main_py_path)
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                # 3. Call the tool
+                response = await session.call_tool(name=tool_name, arguments=arguments)
+                # 4. Format and send the response
+                # The response from our server is a TextContent object containing a string
+                content_block = response.content[0] if response.content else None
+                result_text = None
+                if content_block is not None:
+                    if isinstance(content_block, TextContent):
+                        result_text = content_block.text
+                    elif getattr(content_block, 'type', None) == 'image':
+                        result_text = '[Image content received]'
+                    elif getattr(content_block, 'type', None) == 'audio':
+                        result_text = '[Audio content received]'
+                    elif getattr(content_block, 'type', None) == 'resource':
+                        result_text = '[Embedded resource received]'
+                    else:
+                        result_text = str(content_block)
+                else:
+                    result_text = '[No content returned from tool]'
+                # Try to parse the string as JSON for pretty formatting
+                try:
+                    result_data = json.loads(result_text.replace("'", '"')) # Basic string to JSON conversion
+                    pretty_response = json.dumps(result_data, indent=2)
+                    await say(
+                        text=f"""Tool `{tool_name}` finished with result:
+```
+{pretty_response}
+```"""
+                    )
+                except json.JSONDecodeError:
+                    # If it's not JSON, just send the raw text
+                    await say(text=f"Tool `{tool_name}` finished with result:\n{result_text}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
