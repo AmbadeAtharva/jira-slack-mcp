@@ -204,6 +204,307 @@ def search_confluence_pages(query: str) -> dict:
     except Exception as e:
         return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
+# NEW CRUD FUNCTIONS FOR JIRA
+
+def update_jira_ticket(ticket_id: str, summary: str = None, description: str = None, status: str = None, assignee: str = None) -> dict:
+    """Updates an existing Jira ticket with new information."""
+    print(f"Tool 'update_jira_ticket' called for ticket: {ticket_id}")
+    
+    if not all([ATLASSIAN_URL, ATLASSIAN_EMAIL, ATLASSIAN_TOKEN]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "message": f"Mock update completed for {ticket_id}",
+            "url": f"https://mock-jira.com/browse/{ticket_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{ATLASSIAN_URL}/rest/api/3/issue/{ticket_id}"
+        auth = requests.auth.HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_TOKEN)
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        
+        # Build update payload
+        fields = {}
+        if summary:
+            fields["summary"] = summary
+        if description:
+            fields["description"] = {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}]
+            }
+        if assignee:
+            fields["assignee"] = {"name": assignee}
+        
+        payload = {"fields": fields}
+        
+        # Handle status transition if provided
+        if status:
+            # First, get available transitions
+            transitions_url = f"{ATLASSIAN_URL}/rest/api/3/issue/{ticket_id}/transitions"
+            transitions_response = requests.get(transitions_url, headers={"Accept": "application/json"}, auth=auth)
+            if transitions_response.status_code == 200:
+                transitions = transitions_response.json().get("transitions", [])
+                for transition in transitions:
+                    if transition.get("to", {}).get("name", "").lower() == status.lower():
+                        # Execute the transition
+                        transition_payload = {"transition": {"id": transition["id"]}}
+                        transition_response = requests.post(
+                            f"{ATLASSIAN_URL}/rest/api/3/issue/{ticket_id}/transitions",
+                            data=json.dumps(transition_payload),
+                            headers=headers,
+                            auth=auth
+                        )
+                        if transition_response.status_code != 204:
+                            return {"success": False, "error": f"Failed to update status: {transition_response.text}"}
+                        break
+        
+        # Update other fields
+        response = requests.put(api_url, data=json.dumps(payload), headers=headers, auth=auth)
+        
+        if response.status_code == 204:  # 204 No Content is success for PUT
+            return {
+                "success": True,
+                "ticket_id": ticket_id,
+                "message": f"Successfully updated {ticket_id}",
+                "url": f"{ATLASSIAN_URL}/browse/{ticket_id}"
+            }
+        else:
+            return {"success": False, "error": f"Jira API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+def delete_jira_ticket(ticket_id: str) -> dict:
+    """Deletes a Jira ticket (moves it to trash)."""
+    print(f"Tool 'delete_jira_ticket' called for ticket: {ticket_id}")
+    
+    if not all([ATLASSIAN_URL, ATLASSIAN_EMAIL, ATLASSIAN_TOKEN]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "message": f"Mock deletion completed for {ticket_id}",
+            "url": f"https://mock-jira.com/browse/{ticket_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{ATLASSIAN_URL}/rest/api/3/issue/{ticket_id}"
+        auth = requests.auth.HTTPBasicAuth(ATLASSIAN_EMAIL, ATLASSIAN_TOKEN)
+        headers = {"Accept": "application/json"}
+        
+        response = requests.delete(api_url, headers=headers, auth=auth)
+        
+        if response.status_code == 204:  # 204 No Content is success for DELETE
+            return {
+                "success": True,
+                "ticket_id": ticket_id,
+                "message": f"Successfully deleted {ticket_id}",
+                "url": f"{ATLASSIAN_URL}/browse/{ticket_id}"
+            }
+        else:
+            return {"success": False, "error": f"Jira API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+# NEW CRUD FUNCTIONS FOR CONFLUENCE
+
+def create_confluence_page(space_key: str, title: str, content: str, parent_page_id: str = None) -> dict:
+    """Creates a new Confluence page."""
+    print(f"Tool 'create_confluence_page' called for space: {space_key}")
+    
+    confluence_url = os.getenv("CONFLUENCE_URL", ATLASSIAN_URL)
+    confluence_email = os.getenv("CONFLUENCE_EMAIL", ATLASSIAN_EMAIL)
+    confluence_token = os.getenv("CONFLUENCE_TOKEN", ATLASSIAN_TOKEN)
+    
+    if not all([confluence_url, confluence_email, confluence_token]):
+        print("--> Running in MOCK MODE.")
+        page_id = "12345"
+        return {
+            "success": True,
+            "page_id": page_id,
+            "title": title,
+            "url": f"https://mock-confluence.com/pages/viewpage.action?pageId={page_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{confluence_url}/wiki/rest/api/content"
+        auth = requests.auth.HTTPBasicAuth(confluence_email, confluence_token)
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        
+        payload = {
+            "type": "page",
+            "title": title,
+            "space": {"key": space_key},
+            "body": {
+                "storage": {
+                    "value": content,
+                    "representation": "storage"
+                }
+            }
+        }
+        
+        if parent_page_id:
+            payload["ancestors"] = [{"id": parent_page_id}]
+        
+        response = requests.post(api_url, data=json.dumps(payload), headers=headers, auth=auth)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "success": True,
+                "page_id": data.get("id"),
+                "title": title,
+                "url": f"{confluence_url}/wiki/pages/viewpage.action?pageId={data.get('id')}"
+            }
+        else:
+            return {"success": False, "error": f"Confluence API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+def get_confluence_page(page_id: str) -> dict:
+    """Retrieves a specific Confluence page by its ID."""
+    print(f"Tool 'get_confluence_page' called for page: {page_id}")
+    
+    confluence_url = os.getenv("CONFLUENCE_URL", ATLASSIAN_URL)
+    confluence_email = os.getenv("CONFLUENCE_EMAIL", ATLASSIAN_EMAIL)
+    confluence_token = os.getenv("CONFLUENCE_TOKEN", ATLASSIAN_TOKEN)
+    
+    if not all([confluence_url, confluence_email, confluence_token]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "page_id": page_id,
+            "title": "Sample Confluence Page",
+            "content": "This is sample content for the page...",
+            "url": f"https://mock-confluence.com/pages/viewpage.action?pageId={page_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{confluence_url}/wiki/rest/api/content/{page_id}?expand=body.storage"
+        auth = requests.auth.HTTPBasicAuth(confluence_email, confluence_token)
+        headers = {"Accept": "application/json"}
+        
+        response = requests.get(api_url, headers=headers, auth=auth)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "success": True,
+                "page_id": data.get("id"),
+                "title": data.get("title"),
+                "content": data.get("body", {}).get("storage", {}).get("value", ""),
+                "url": f"{confluence_url}/wiki/pages/viewpage.action?pageId={data.get('id')}"
+            }
+        else:
+            return {"success": False, "error": f"Confluence API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+def update_confluence_page(page_id: str, title: str = None, content: str = None) -> dict:
+    """Updates an existing Confluence page."""
+    print(f"Tool 'update_confluence_page' called for page: {page_id}")
+    
+    confluence_url = os.getenv("CONFLUENCE_URL", ATLASSIAN_URL)
+    confluence_email = os.getenv("CONFLUENCE_EMAIL", ATLASSIAN_EMAIL)
+    confluence_token = os.getenv("CONFLUENCE_TOKEN", ATLASSIAN_TOKEN)
+    
+    if not all([confluence_url, confluence_email, confluence_token]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "page_id": page_id,
+            "message": f"Mock update completed for page {page_id}",
+            "url": f"https://mock-confluence.com/pages/viewpage.action?pageId={page_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        # First get the current page to get the version
+        get_url = f"{confluence_url}/wiki/rest/api/content/{page_id}"
+        auth = requests.auth.HTTPBasicAuth(confluence_email, confluence_token)
+        headers = {"Accept": "application/json"}
+        
+        get_response = requests.get(get_url, headers=headers, auth=auth)
+        if get_response.status_code != 200:
+            return {"success": False, "error": f"Failed to get page: {get_response.text}"}
+        
+        current_data = get_response.json()
+        version = current_data.get("version", {}).get("number", 1)
+        
+        # Build update payload
+        payload = {
+            "version": {"number": version + 1}
+        }
+        
+        if title:
+            payload["title"] = title
+        if content:
+            payload["body"] = {
+                "storage": {
+                    "value": content,
+                    "representation": "storage"
+                }
+            }
+        
+        # Update the page
+        update_url = f"{confluence_url}/wiki/rest/api/content/{page_id}"
+        headers["Content-Type"] = "application/json"
+        response = requests.put(update_url, data=json.dumps(payload), headers=headers, auth=auth)
+        
+        if response.status_code == 200:
+            return {
+                "success": True,
+                "page_id": page_id,
+                "message": f"Successfully updated page {page_id}",
+                "url": f"{confluence_url}/wiki/pages/viewpage.action?pageId={page_id}"
+            }
+        else:
+            return {"success": False, "error": f"Confluence API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+def delete_confluence_page(page_id: str) -> dict:
+    """Deletes a Confluence page."""
+    print(f"Tool 'delete_confluence_page' called for page: {page_id}")
+    
+    confluence_url = os.getenv("CONFLUENCE_URL", ATLASSIAN_URL)
+    confluence_email = os.getenv("CONFLUENCE_EMAIL", ATLASSIAN_EMAIL)
+    confluence_token = os.getenv("CONFLUENCE_TOKEN", ATLASSIAN_TOKEN)
+    
+    if not all([confluence_url, confluence_email, confluence_token]):
+        print("--> Running in MOCK MODE.")
+        return {
+            "success": True,
+            "page_id": page_id,
+            "message": f"Mock deletion completed for page {page_id}",
+            "url": f"https://mock-confluence.com/pages/viewpage.action?pageId={page_id}"
+        }
+    
+    print("--> Running in LIVE MODE.")
+    try:
+        api_url = f"{confluence_url}/wiki/rest/api/content/{page_id}"
+        auth = requests.auth.HTTPBasicAuth(confluence_email, confluence_token)
+        headers = {"Accept": "application/json"}
+        
+        response = requests.delete(api_url, headers=headers, auth=auth)
+        
+        if response.status_code == 204:  # 204 No Content is success for DELETE
+            return {
+                "success": True,
+                "page_id": page_id,
+                "message": f"Successfully deleted page {page_id}",
+                "url": f"{confluence_url}/wiki/pages/viewpage.action?pageId={page_id}"
+            }
+        else:
+            return {"success": False, "error": f"Confluence API error: {response.status_code} - {response.text}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
 # --- 4. Main Server Execution Block ---
 if __name__ == "__main__":
     server = Server("atlassian-mcp-server")
@@ -259,6 +560,83 @@ if __name__ == "__main__":
                     },
                     "required": ["query"]
                 }
+            ),
+            # NEW JIRA CRUD TOOLS
+            Tool(
+                name="update_jira_ticket",
+                description="Updates an existing Jira ticket with new summary, description, status, or assignee.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "ticket_id": {"type": "string", "description": "The ID of the Jira ticket to update (e.g., 'PROJ-123')"},
+                        "summary": {"type": "string", "description": "New summary/title for the ticket (optional)"},
+                        "description": {"type": "string", "description": "New description for the ticket (optional)"},
+                        "status": {"type": "string", "description": "New status for the ticket (e.g., 'In Progress', 'Done') (optional)"},
+                        "assignee": {"type": "string", "description": "Username of the new assignee (optional)"}
+                    },
+                    "required": ["ticket_id"]
+                }
+            ),
+            Tool(
+                name="delete_jira_ticket",
+                description="Deletes a Jira ticket (moves it to trash).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "ticket_id": {"type": "string", "description": "The ID of the Jira ticket to delete (e.g., 'PROJ-123')"}
+                    },
+                    "required": ["ticket_id"]
+                }
+            ),
+            # NEW CONFLUENCE CRUD TOOLS
+            Tool(
+                name="create_confluence_page",
+                description="Creates a new Confluence page in a specified space.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "space_key": {"type": "string", "description": "The key of the Confluence space (e.g., 'TEAM')"},
+                        "title": {"type": "string", "description": "The title of the new page"},
+                        "content": {"type": "string", "description": "The content of the page (can include Confluence markup)"},
+                        "parent_page_id": {"type": "string", "description": "ID of the parent page (optional, for creating sub-pages)"}
+                    },
+                    "required": ["space_key", "title", "content"]
+                }
+            ),
+            Tool(
+                name="get_confluence_page",
+                description="Retrieves a specific Confluence page by its ID.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "page_id": {"type": "string", "description": "The ID of the Confluence page to retrieve"}
+                    },
+                    "required": ["page_id"]
+                }
+            ),
+            Tool(
+                name="update_confluence_page",
+                description="Updates an existing Confluence page with new title and/or content.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "page_id": {"type": "string", "description": "The ID of the Confluence page to update"},
+                        "title": {"type": "string", "description": "New title for the page (optional)"},
+                        "content": {"type": "string", "description": "New content for the page (optional)"}
+                    },
+                    "required": ["page_id"]
+                }
+            ),
+            Tool(
+                name="delete_confluence_page",
+                description="Deletes a Confluence page.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "page_id": {"type": "string", "description": "The ID of the Confluence page to delete"}
+                    },
+                    "required": ["page_id"]
+                }
             )
         ]
 
@@ -303,6 +681,54 @@ if __name__ == "__main__":
                 result = {"success": False, "error": "query is required"}
             else:
                 result = search_confluence_pages(str(query))
+        # NEW JIRA CRUD HANDLERS
+        elif name == "update_jira_ticket":
+            ticket_id = arguments.get("ticket_id")
+            if not ticket_id:
+                result = {"success": False, "error": "ticket_id is required"}
+            else:
+                summary = arguments.get("summary")
+                description = arguments.get("description")
+                status = arguments.get("status")
+                assignee = arguments.get("assignee")
+                result = update_jira_ticket(str(ticket_id), summary, description, status, assignee)
+        elif name == "delete_jira_ticket":
+            ticket_id = arguments.get("ticket_id")
+            if not ticket_id:
+                result = {"success": False, "error": "ticket_id is required"}
+            else:
+                result = delete_jira_ticket(str(ticket_id))
+        # NEW CONFLUENCE CRUD HANDLERS
+        elif name == "create_confluence_page":
+            space_key = arguments.get("space_key")
+            title = arguments.get("title")
+            content = arguments.get("content")
+            parent_page_id = arguments.get("parent_page_id")
+            
+            if not all([space_key, title, content]):
+                result = {"success": False, "error": "Missing required arguments: space_key, title, content"}
+            else:
+                result = create_confluence_page(str(space_key), str(title), str(content), parent_page_id)
+        elif name == "get_confluence_page":
+            page_id = arguments.get("page_id")
+            if not page_id:
+                result = {"success": False, "error": "page_id is required"}
+            else:
+                result = get_confluence_page(str(page_id))
+        elif name == "update_confluence_page":
+            page_id = arguments.get("page_id")
+            if not page_id:
+                result = {"success": False, "error": "page_id is required"}
+            else:
+                title = arguments.get("title")
+                content = arguments.get("content")
+                result = update_confluence_page(str(page_id), title, content)
+        elif name == "delete_confluence_page":
+            page_id = arguments.get("page_id")
+            if not page_id:
+                result = {"success": False, "error": "page_id is required"}
+            else:
+                result = delete_confluence_page(str(page_id))
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
         
